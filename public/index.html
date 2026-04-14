@@ -158,23 +158,49 @@ async function api(path, body, dispatch) {
 function useSSE(roomCode, onEvent) {
   const esRef = useRef(null);
   const cbRef = useRef(onEvent);
+  const seqRef = useRef(0);
+  const pollRef = useRef(null);
   cbRef.current = onEvent;
 
   useEffect(() => {
     if (esRef.current) { esRef.current.close(); esRef.current = null; }
-    const url = roomCode ? `/events?clientId=${clientId}&roomCode=${roomCode}` : `/events?clientId=${clientId}`;
-    const es = new EventSource(url);
-    esRef.current = es;
+    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
 
-    const handler = (eventName) => (e) => {
-      try { cbRef.current(eventName, JSON.parse(e.data)); } catch {}
+    // Try SSE
+    try {
+      const url = roomCode ? `/events?clientId=${clientId}&roomCode=${roomCode}` : `/events?clientId=${clientId}`;
+      const es = new EventSource(url);
+      esRef.current = es;
+      const handler = (eventName) => (e) => {
+        try { cbRef.current(eventName, JSON.parse(e.data)); } catch {}
+      };
+      const EVENTS = ['connected','room:created','room:joined','room:updated','room:error',
+                      'game:loading','game:question','game:reveal','game:leaderboard','game:final'];
+      EVENTS.forEach(ev => es.addEventListener(ev, handler(ev)));
+    } catch {}
+
+    // Polling fallback — runs every 2s to catch any missed SSE events
+    pollRef.current = setInterval(async () => {
+      try {
+        const r = await fetch('/api/poll', {
+          method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ clientId, lastSeq: seqRef.current })
+        });
+        const { events } = await r.json();
+        if (events && events.length > 0) {
+          events.forEach(({ event, data, seq }) => {
+            seqRef.current = seq;
+            cbRef.current(event, data);
+          });
+        }
+      } catch {}
+    }, 2000);
+
+    return () => {
+      if (esRef.current) { esRef.current.close(); esRef.current = null; }
+      if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
     };
-
-    const EVENTS = ['connected','room:created','room:joined','room:updated','room:error',
-                    'game:loading','game:question','game:reveal','game:leaderboard','game:final'];
-    EVENTS.forEach(ev => es.addEventListener(ev, handler(ev)));
-
-    return () => { es.close(); esRef.current = null; };
   }, [roomCode]);
 }
 

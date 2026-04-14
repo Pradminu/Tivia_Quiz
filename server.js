@@ -26,16 +26,31 @@ const USE_GROK   = !!GROK_KEY;
 
 // ── SSE Registry ──────────────────────────────────────────────────────────────
 const clients = new Map(); // clientId → { res, roomCode }
+const clientQueues = new Map(); // clientId → [{event, data, seq}]
+let globalSeq = 0;
 
 function sendTo(clientId, event, data) {
+  // Always queue the event for polling fallback
+  if (!clientQueues.has(clientId)) clientQueues.set(clientId, []);
+  const queue = clientQueues.get(clientId);
+  queue.push({ event, data, seq: ++globalSeq });
+  if (queue.length > 50) queue.shift(); // keep last 50 events
+
+  // Also try SSE
   const conn = clients.get(clientId);
   if (!conn || conn.res.writableEnded) return;
-  conn.res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  try { conn.res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); } catch {}
 }
 
 function broadcast(roomCode, event, data) {
   for (const [id, conn] of clients) {
     if (conn.roomCode === roomCode) sendTo(id, event, data);
+  }
+  // Also send to queued clients not in SSE map
+  for (const [id, q] of clientQueues) {
+    if (!clients.has(id)) continue;
+    const c = clients.get(id);
+    if (c && c.roomCode === roomCode) sendTo(id, event, data);
   }
 }
 
@@ -780,6 +795,16 @@ const server = http.createServer(async (req, res) => {
         resetRoom(room);
         broadcast(roomCode, 'room:updated', { ...roomState(room), phase: 'lobby' });
         return json(res, 200, { ok: true });
+      }
+
+      // Poll for missed events
+      if (pathname === '/api/poll') {
+        const { clientId, lastSeq } = body;
+        if (!clientId) return json(res, 400, { error: 'clientId required' });
+        const queue = clientQueues.get(clientId) || [];
+        const seq = lastSeq || 0;
+        const newEvents = queue.filter(e => e.seq > seq);
+        return json(res, 200, { events: newEvents });
       }
 
       json(res, 404, { error: 'Unknown endpoint' });

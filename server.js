@@ -25,32 +25,32 @@ const GROK_KEY   = process.env.GROK_API_KEY || '';
 const USE_GROK   = !!GROK_KEY;
 
 // ── SSE Registry ──────────────────────────────────────────────────────────────
-const clients = new Map(); // clientId → { res, roomCode }
+const clients = new Map();     // clientId → { res, roomCode }
 const clientQueues = new Map(); // clientId → [{event, data, seq}]
+const clientRooms = new Map();  // clientId → roomCode  (persists even without SSE)
 let globalSeq = 0;
 
+function registerClientRoom(clientId, roomCode) {
+  clientRooms.set(clientId, roomCode);
+  if (!clientQueues.has(clientId)) clientQueues.set(clientId, []);
+}
+
 function sendTo(clientId, event, data) {
-  // Always queue the event for polling fallback
   if (!clientQueues.has(clientId)) clientQueues.set(clientId, []);
   const queue = clientQueues.get(clientId);
   queue.push({ event, data, seq: ++globalSeq });
-  if (queue.length > 50) queue.shift(); // keep last 50 events
-
+  if (queue.length > 50) queue.shift();
   // Also try SSE
   const conn = clients.get(clientId);
-  if (!conn || conn.res.writableEnded) return;
-  try { conn.res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); } catch {}
+  if (conn && !conn.res.writableEnded) {
+    try { conn.res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); } catch {}
+  }
 }
 
 function broadcast(roomCode, event, data) {
-  for (const [id, conn] of clients) {
-    if (conn.roomCode === roomCode) sendTo(id, event, data);
-  }
-  // Also send to queued clients not in SSE map
-  for (const [id, q] of clientQueues) {
-    if (!clients.has(id)) continue;
-    const c = clients.get(id);
-    if (c && c.roomCode === roomCode) sendTo(id, event, data);
+  // Use clientRooms so it works even when SSE is not connected
+  for (const [id, rc] of clientRooms) {
+    if (rc === roomCode) sendTo(id, event, data);
   }
 }
 
@@ -701,6 +701,7 @@ const server = http.createServer(async (req, res) => {
         const room = createRoom(clientId, playerName.trim(), settings);
         const conn = clients.get(clientId);
         if (conn) conn.roomCode = room.code;
+        registerClientRoom(clientId, room.code);
         const p = room.players.get(clientId);
         const payload = { roomCode: room.code, player: { clientId, name: p.name, avatar: p.avatar }, ...roomState(room) };
         sendTo(clientId, 'room:created', payload);
@@ -732,6 +733,7 @@ const server = http.createServer(async (req, res) => {
 
         const conn = clients.get(clientId);
         if (conn) conn.roomCode = code;
+        registerClientRoom(clientId, code);
         const p = room.players.get(clientId);
         const joinPayload = {
           roomCode: code,

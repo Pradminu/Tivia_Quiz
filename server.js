@@ -687,8 +687,9 @@ const server = http.createServer(async (req, res) => {
         const conn = clients.get(clientId);
         if (conn) conn.roomCode = room.code;
         const p = room.players.get(clientId);
-        sendTo(clientId, 'room:created', { roomCode: room.code, player: { clientId, name: p.name, avatar: p.avatar }, ...roomState(room) });
-        return json(res, 200, { ok: true });
+        const payload = { roomCode: room.code, player: { clientId, name: p.name, avatar: p.avatar }, ...roomState(room) };
+        sendTo(clientId, 'room:created', payload);
+        return json(res, 200, { ok: true, event: 'room:created', data: payload });
       }
 
       // Join room
@@ -717,17 +718,18 @@ const server = http.createServer(async (req, res) => {
         const conn = clients.get(clientId);
         if (conn) conn.roomCode = code;
         const p = room.players.get(clientId);
-        sendTo(clientId, 'room:joined', {
+        const joinPayload = {
           roomCode: code,
           player: { clientId, name: p.name, avatar: p.avatar },
           isHost: room.hostClientId === clientId,
           ...roomState(room),
-        });
+        };
+        sendTo(clientId, 'room:joined', joinPayload);
         for (const [id] of clients) {
           if (id !== clientId && clients.get(id)?.roomCode === code)
             sendTo(id, 'room:updated', roomState(room));
         }
-        return json(res, 200, { ok: true });
+        return json(res, 200, { ok: true, event: 'room:joined', data: joinPayload });
       }
 
       // Update settings

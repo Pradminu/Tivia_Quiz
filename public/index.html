@@ -143,9 +143,16 @@ const ROUNDS = [5,10,15];
 // ── SSE + API ─────────────────────────────────────────────────────────────────
 const clientId = crypto.randomUUID();
 
-async function api(path, body) {
+async function api(path, body, dispatch) {
   const r = await fetch(path, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
-  return r.json();
+  const data = await r.json();
+  // Fallback: if SSE is delayed, handle the event from the API response directly
+  if (dispatch && data.event && data.data) {
+    const { event, data: d } = data;
+    if (event === 'room:created') dispatch({ type:'ROOM_CREATED', payload:{ roomCode:d.roomCode, myName:d.player.name, myAvatar:d.player.avatar, isHost:true, hostClientId:d.hostClientId??d.player.clientId, players:d.players, settings:d.settings } });
+    if (event === 'room:joined')  dispatch({ type:'ROOM_JOINED',  payload:{ roomCode:d.roomCode, myName:d.player.name, myAvatar:d.player.avatar, isHost:d.isHost, hostClientId:d.hostClientId, players:d.players, settings:d.settings } });
+  }
+  return data;
 }
 
 function useSSE(roomCode, onEvent) {
@@ -275,14 +282,14 @@ function HomeScreen({ state, dispatch }) {
     if (!name.trim() || (topic==='custom'&&!custom.trim())) return;
     setBusy(true); dispatch({type:'CLEAR_ERROR'});
     await api('/api/room/create', { playerName:name.trim(), clientId,
-      settings:{ topic, customTopic:topic==='custom'?custom.trim():null, difficulty:diff, totalRounds:rds } });
+      settings:{ topic, customTopic:topic==='custom'?custom.trim():null, difficulty:diff, totalRounds:rds } }, dispatch);
   }
 
   async function join(e) {
     e.preventDefault();
     if (!name.trim() || !code.trim()) return;
     dispatch({type:'CLEAR_ERROR'});
-    await api('/api/room/join', { playerName:name.trim(), clientId, roomCode:code.trim().toUpperCase() });
+    await api('/api/room/join', { playerName:name.trim(), clientId, roomCode:code.trim().toUpperCase() }, dispatch);
   }
 
   const STARS = ['⭐','✨','🌟','💫','🎯','🏆','🎲','🧠','🎉','💡','🔥','⚡'];

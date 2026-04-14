@@ -659,15 +659,16 @@ const server = http.createServer(async (req, res) => {
 
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
+      'Cache-Control': 'no-cache, no-transform',
       'Connection': 'keep-alive',
       'Access-Control-Allow-Origin': '*',
+      'X-Accel-Buffering': 'no',
     });
 
     clients.set(clientId, { res, roomCode: roomCode || null });
     res.write(`event: connected\ndata: {"clientId":"${clientId}"}\n\n`);
 
-    const hb = setInterval(() => res.writableEnded ? clearInterval(hb) : res.write(':hb\n\n'), 25000);
+    const hb = setInterval(() => res.writableEnded ? clearInterval(hb) : res.write(':hb\n\n'), 15000);
     req.on('close', () => { clearInterval(hb); clients.delete(clientId); onDisconnect(clientId); });
     return;
   }
@@ -831,7 +832,7 @@ function onDisconnect(clientId) {
   }
 }
 
-server.listen(PORT, () => {
+server.listen(PORT, '0.0.0.0', () => {
   console.log(`\n🎮  Trivia Blitz  →  http://localhost:${PORT}\n`);
   if (USE_GROK) console.log('🤖  Using Groq AI (Llama 3.3) for questions\n');
   else if (!API_KEY) console.warn('⚠   No AI key set — using local question bank\n');
